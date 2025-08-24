@@ -1,0 +1,123 @@
+package com.vlasovs.chat
+
+import android.Manifest
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.vlasovs.chat.core.CallManager
+import com.vlasovs.chat.core.CallState
+import com.vlasovs.chat.core.NsdPeer
+
+class MainActivity : ComponentActivity() {
+
+    private val requestMic = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val requestNotif = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        CallManager.init(this)
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            requestNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        requestMic.launch(Manifest.permission.RECORD_AUDIO)
+
+        setContent {
+            MaterialTheme {
+                Surface(Modifier.fillMaxSize()) {
+                    AppScreen()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AppScreen() {
+    val peers by CallManager.peers.collectAsState(initial = emptyList())
+    val state by CallManager.state.collectAsState(initial = CallState.Idle)
+
+    when (state) {
+        is CallState.Idle -> PeerList(peers) { CallManager.call(it) }
+        is CallState.Calling -> CallingScreen((state as CallState.Calling).to) { CallManager.endCall() }
+        is CallState.Incoming -> IncomingScreen { accept -> if (accept) CallManager.acceptIncoming() else CallManager.endCall() }
+        is CallState.InCall -> InCallScreen(state as CallState.InCall)
+    }
+}
+
+@Composable
+fun PeerList(peers: List<NsdPeer>, onCall: (NsdPeer) -> Unit) {
+    Column(Modifier.fillMaxSize().padding(16.dp)) {
+        Text("Доступные устройства в сети", fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        if (peers.isEmpty()) {
+            Text("Поиск устройств... Убедитесь, что устройства в одной Wi‑Fi сети и нет изоляции клиентов.")
+        } else {
+            peers.forEach { peer ->
+                Card(Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { onCall(peer) }) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(peer.name)
+                        Text("${peer.host.hostAddress}:${peer.port}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CallingScreen(to: NsdPeer, onCancel: () -> Unit) {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("Звоним: ${to.name}")
+        Spacer(Modifier.height(16.dp))
+        Button(onClick = onCancel) { Text("Отменить") }
+    }
+}
+
+@Composable
+fun IncomingScreen(onAction: (Boolean) -> Unit) {
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("Входящий звонок")
+        Spacer(Modifier.height(16.dp))
+        Row {
+            Button(onClick = { onAction(true) }, modifier = Modifier.padding(end = 8.dp)) { Text("Принять") }
+            OutlinedButton(onClick = { onAction(false) }) { Text("Отклонить") }
+        }
+    }
+}
+
+@Composable
+fun InCallScreen(state: CallState.InCall) {
+    var muted by remember { mutableStateOf(state.muted) }
+    var speaker by remember { mutableStateOf(state.speaker) }
+    LaunchedEffect(state.muted) { muted = state.muted }
+    LaunchedEffect(state.speaker) { speaker = state.speaker }
+
+    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Text("В разговоре: ${state.with.name}")
+        Spacer(Modifier.height(16.dp))
+        Row {
+            Button(onClick = {
+                muted = !muted
+                CallManager.onMuteToggle(muted)
+            }) { Text(if (muted) "Unmute" else "Mute") }
+            Spacer(Modifier.width(12.dp))
+            Button(onClick = {
+                speaker = !speaker
+                CallManager.onSpeakerToggle(speaker)
+            }) { Text(if (speaker) "Динамик вкл" else "Динамик выкл") }
+        }
+        Spacer(Modifier.height(24.dp))
+        OutlinedButton(onClick = { CallManager.endCall() }) { Text("Завершить") }
+    }
+}
